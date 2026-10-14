@@ -2,7 +2,6 @@ import re
 from datetime import date
 
 
-
 class VehiclePass:
 
     def __init__(self, record_date: date, plate_number: str):
@@ -14,8 +13,10 @@ class VehiclePass:
                 f"plate_number={self.plate_number!r})")
 
     def __str__(self):
-        return (f"Фиксация проезда: дата = {self.record_date.strftime('%Y.%m.%d')}, "
+        return (f"Фиксация проезда: дата = "
+                f"{self.record_date:%Y.%m.%d}, "
                 f"номер автомобиля = {self.plate_number}")
+
 
 class VehiclePassWithSpeed(VehiclePass):
 
@@ -40,44 +41,62 @@ class VehiclePassWithCamera(VehiclePass):
         return (f"{super().__str__()}, камера = {self.camera_id}, "
                 f"координаты = ({self.latitude}, {self.longitude})")
 
-PLATE_PATTERN = re.compile(r'^[А-Я]\d{3}[А-Я]{2}\d{2,3}$')
 
-def parse_record(line: str) -> VehiclePass:
+def parse_line(line: str):
+    line = line.strip()
+    if not line:
+        return None
 
-    quoted = re.findall(r'"([^"]*)"', line)
-    plate = quoted[0] if quoted else None
+    kind = line.split()[0].lower()
 
-    line_wo_quotes = re.sub(r'"[^"]*"', ' ', line)
-
-    date_match = re.search(r'\b(\d{4})\.(\d{2})\.(\d{2})\b', line_wo_quotes)
+    # 1) сначала вытаскиваем дату
+    date_match = re.search(r'\b(\d{4})\.(\d{2})\.(\d{2})\b', line)
     year, month, day = map(int, date_match.groups())
     record_date = date(year, month, day)
 
-    return VehiclePass(record_date, plate)
+    # 2) строки в кавычках
+    quoted = re.findall(r'"([^"]*)"', line)
+
+    # 3) удаляем дату И кавычки — чтобы не путались с числами
+    clean = re.sub(r'\b\d{4}\.\d{2}\.\d{2}\b', ' ', line)
+    clean = re.sub(r'"[^"]*"', ' ', clean)
+
+    # 4) оставшиеся дробные числа — это скорость / широта / долгота
+    floats = [float(x) for x in re.findall(r'\b\d+\.\d+\b', clean)]
+
+    if kind == "скорость":
+        return VehiclePassWithSpeed(record_date, quoted[0], floats[0])
+    if kind == "камера":
+        return VehiclePassWithCamera(
+            record_date, quoted[0], quoted[1], floats[0], floats[1]
+        )
+    return VehiclePass(record_date, quoted[0] if quoted else None)
+
+
+def parse_text(text):
+    result = []
+    for raw in text.splitlines():
+        obj = parse_line(raw)
+        if obj is not None:
+            result.append(obj)
+    return result
+
+
+def parse_file(path):
+    with open(path, encoding="utf-8") as f:
+        return parse_text(f.read())
 
 
 if __name__ == "__main__":
-    print("== Базовый тип: parse_record ==")
-    samples = [
-        'Фиксация 2024.09.15 "А123БВ777"',
-        'Проезд 2023.01.01 "В456ЕК99"',
-        'Автомобиль 2022.12.31 "М789НР197"',
-        'Камера 2025.06.07 "О321РС750"',
-    ]
-
-    for s in samples:
-        obj = parse_record(s)
-        print(f"Вход : {s}")
-        print(f"Выход: {obj}")
-
-    print("\n== Новые типы ==")
-
-    speed_pass = VehiclePassWithSpeed(date(2024, 9, 16), "В456ЕК99", 87.5)
-    print(f"Вход : Скорость 2024.09.16 \"В456ЕК99\" 87.5")
-    print(f"Выход: {speed_pass}")
-
-    camera_pass = VehiclePassWithCamera(
-        date(2024, 9, 17), "М789НР197", "CAM-42", 55.7558, 37.6173
+    print("== Из строки ==")
+    TEXT = (
+        'Фиксация 2024.09.15 "А123БВ777"\n'
+        'Скорость 2024.09.16 "В456ЕК99" 87.5\n'
+        'Камера 2024.09.17 "М789НР197" "CAM-42" 55.7558 37.6173\n'
     )
-    print(f'Вход : Камера 2024.09.17 "М789НР197" "CAM-42" 55.7558 37.6173')
-    print(f"Выход: {camera_pass}")
+    for obj in parse_text(TEXT):
+        print(obj)
+
+    print("\n== Из файла ==")
+    for obj in parse_file("records.txt"):
+        print(obj)
